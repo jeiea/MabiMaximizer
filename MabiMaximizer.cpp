@@ -27,56 +27,6 @@ bool GetParentDirectory(LPTSTR szPath)
 	return false;
 }
 
-LPTSTR lstrrev(LPTSTR lpString)
-{
-	unsigned len = lstrlen(lpString) - 1;
-	unsigned mid = lstrlen(lpString) / 2;
-
-	for (unsigned idx = 0; idx < mid; idx++)
-	{
-		TCHAR swap = lpString[idx];
-		lpString[idx] = lpString[len - idx];
-		lpString[len - idx] = swap;
-	}
-
-	return lpString;
-}
-
-void ParseMabinogiFilesRegistry(TCHAR mabinogiFiles[])
-{
-	TCHAR launcher[MAX_PATH] = _T("");
-	TCHAR* token, *prevToken = mabinogiFiles;
-
-	prevToken = token = mabinogiFiles;
-	while (token = StrPBrk(prevToken, _T("*%")))
-	{
-		if (*token == _T('%'))
-		{
-			if (!GetParentDirectory(launcher))
-			{
-				launcher[0] = NULL;
-			}
-			else
-			{
-				lstrcat(launcher, _T("\\"));
-			}
-		}
-		else
-		{
-			*token = NULL;
-			if (lstrcmpi(prevToken, _T("Client.exe")) == 0)
-			{
-				lstrcpy(mabinogiFiles, launcher);
-				lstrcat(mabinogiFiles, _T("Mabinogi.exe"));
-				return;
-			}
-			lstrcat(launcher, prevToken);
-			lstrcat(launcher, _T("\\"));
-		}
-		prevToken = token + 1;
-	}
-}
-
 bool GetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 {
 	// 정상적으로 설치되었을 때 쉽게 경로를 구할 수 있는 정석
@@ -90,18 +40,15 @@ bool GetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 	}
 
 	// 설치하지 않았을 때 실행하고 남는 찌꺼기를 찾는 방법
-	TCHAR mabinogiFiles[65535];
-	DWORD cbSize = sizeof(mabinogiFiles);
-	result = SHGetValue(HKEY_CURRENT_USER, regMabinogi, _T("Files"), NULL, mabinogiFiles, &cbSize);
+	result = SHRegGetPath(HKEY_CURRENT_USER,
+		_T("Software\\Ahnlab\\HShield\\eh*;o(.."),
+		_T("GamePath"), mabinogiPath, NULL);
 
-	if (result == ERROR_SUCCESS)
+	if (result == ERROR_SUCCESS && FileExists(mabinogiPath))
 	{
-		ParseMabinogiFilesRegistry(mabinogiFiles);
-		if (FileExists(mabinogiFiles))
-		{
-			lstrcpy(mabinogiPath, mabinogiFiles);
-			return true;
-		}
+		GetParentDirectory(mabinogiPath);
+		lstrcat(mabinogiPath, _T("\\Mabinogi.exe"));
+		return true;
 	}
 
 	return false;
@@ -137,15 +84,15 @@ void SetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 {
 	TCHAR mabinogiRoot[MAX_PATH];
 	lstrcpy(mabinogiRoot, mabinogiPath);
-	
+
 	if (FileExists(mabinogiRoot))
 	{
 		GetParentDirectory(mabinogiRoot);
 	}
 
+	// SHRegSetPath를 쓰면 변수로 확장이 일어나서 안 됨.
 	SHRegSetUSValue(regMabinogi, _T(""), REG_SZ, mabinogiRoot,
 		lstrlen(mabinogiRoot) * sizeof(mabinogiRoot[0]), SHREGSET_FORCE_HKCU);
-	//SHRegSetPath(HKEY_CURRENT_USER, regMabinogi, _T(""), mabinogiRoot, NULL);
 }
 
 // Mabinogi.exe경로를 다양한 방법으로 찾아서 넣어줌
@@ -177,24 +124,32 @@ bool GetMabinogiPath(TCHAR mabinogiPath[MAX_PATH])
 
 void ChangeWindowStyle(HWND hWnd)
 {
-	// 원래 스타일: WS_CAPTION | WS_VISIBLE | WS_CLIPSIBLINGS | WS_SYSMENU | WS_THICKFRAME | WS_OVERLAPPED | WS_MINIMIZEBOX
 	// WS_CAPTION == WS_BORDER | WS_DLGFRAME인데, 둘 중 하나라도 없으면 타이틀 바가 사라진다.
 	// 동시에 최대화할 때 작업표시줄도 가려버리게 되는데, 이걸 해결할 방법이 마땅치 않다.
-	const LONG fullscreenStyle = WS_MAXIMIZEBOX | WS_BORDER | WS_THICKFRAME;
-	const LONG maximizeStyle = WS_MAXIMIZEBOX;
+	const LONG windowedStyle = WS_CAPTION | WS_VISIBLE | WS_CLIPSIBLINGS | WS_SYSMENU | WS_THICKFRAME | WS_OVERLAPPED | WS_MINIMIZEBOX;
+	const LONG fullscreenStyle = WS_POPUP | WS_MINIMIZE | WS_VISIBLE | WS_CLIPSIBLINGS;
+	const LONG windowedFullscreenToggleStyle = WS_MAXIMIZEBOX | WS_BORDER | WS_THICKFRAME;
+	const LONG maximizeToggleStyle = WS_MAXIMIZEBOX;
 	LONG style;
 
-	style = GetWindowLongPtr(hWnd, GWL_STYLE);
 #ifdef FULLSCREEN
-	style ^= fullscreenStyle;
+	const LONG& toggleStyle = windowedFullscreenToggleStyle;
 #else
-	style ^= maximizeStyle;
+	const LONG& toggleStyle = maximizeToggleStyle;
 #endif
+
+	style = GetWindowLongPtr(hWnd, GWL_STYLE);
+	if (style & WS_POPUP)
+	{
+		MessageBox(hWnd, _T("창 모드로 바꾸고 실행해주세요."), lpszTitle, MB_OK);
+		return;
+	}
+	style ^= toggleStyle;
 	SetWindowLongPtr(hWnd, GWL_STYLE, style);
 	SetClassLongPtr(hWnd, GCL_STYLE, style);
 
-	ShowWindow(hWnd, SW_MAXIMIZE);
 	SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+	ShowWindow(hWnd, SW_MAXIMIZE);
 }
 
 bool IsMabinogiProcess(DWORD processID)
@@ -239,6 +194,7 @@ void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	HWND hMabiWin = FindWindow(_T("Mabinogi"), _T("마비노기"));
 	if (IsWindowVisible(hMabiWin))
 	{
+		KillTimer(hWnd, idEvent);
 		ChangeWindowStyle(hMabiWin);
 		PostQuitMessage(0);
 	}
@@ -260,7 +216,7 @@ void LaunchMabinogi()
 		return;
 	}
 
-	//ShellExecute(NULL, _T("runas"), mabinogiPath, NULL, NULL, SW_SHOW);
+	// 의존성을 줄이기 위해 ShellExecute대신 CreateProcess를 씀.
 	CreateProcess(mabinogiPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
@@ -271,6 +227,13 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 					   _In_ LPTSTR    lpCmdLine,
 					   _In_ int       nCmdShow)
 {
+	HANDLE hMutex = CreateMutex(NULL, FALSE, _T("Mabinogi Maximizer Only Instance Mutex"));
+	if (GetLastError() == ERROR_ALREADY_EXISTS)
+	{
+		CloseHandle(hMutex);
+		return 0;
+	}
+
 	// 실행하지 못하면 타이머에서 IsMabinogiAlive가 알아서 종료해 줄 것임.
 	if (!IsMabinogiAlive())
 	{
@@ -289,5 +252,6 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	}
 	KillTimer(NULL, timerID);
 
+	CloseHandle(hMutex);
 	return (int)Message.wParam;
 }
