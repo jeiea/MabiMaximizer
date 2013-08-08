@@ -1,7 +1,8 @@
 #include "stdafx.h"
+#include "resource.h"
 
-// 정의하면 전체화면 모드, 정의를 해제하면 최대화만 활성화시킨다.
-//#define FULLSCREEN
+// Predefined로 MABISCRVER_MAXIMIZE, MABISCRVER_TASKBAR, MABISCRVER_FULLSCREEN 버전 3개가 있다
+// resource.h에 정의해야 함
 
 // 프로그램 이름
 LPCTSTR lpszTitle = _T("Mabinogi Maximizer");
@@ -29,11 +30,18 @@ bool GetParentDirectory(LPTSTR szPath)
 
 bool GetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 {
-	// 정상적으로 설치되었을 때 쉽게 경로를 구할 수 있는 정석
 	LONG result;
-	result = SHRegGetPath(HKEY_CURRENT_USER, regMabinogi, _T(""), mabinogiPath, NULL);
 
+	// 정상적으로 설치되었을 때 쉽게 경로를 구할 수 있는 정석
+	result = SHRegGetPath(HKEY_CURRENT_USER, regMabinogi, _T(""), mabinogiPath, NULL);
 	lstrcat(mabinogiPath, _T("\\Mabinogi.exe"));
+	if (result == ERROR_SUCCESS && FileExists(mabinogiPath))
+	{
+		return true;
+	}
+
+	// SetMabinogiPath()에서 저장한 경로가 있으면 가져옴.
+	result = SHRegGetPath(HKEY_CURRENT_USER, regMabinogi, _T("LauncherPath_"), mabinogiPath, NULL);
 	if (result == ERROR_SUCCESS && FileExists(mabinogiPath))
 	{
 		return true;
@@ -44,11 +52,14 @@ bool GetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 		_T("Software\\Ahnlab\\HShield\\eh*;o(.."),
 		_T("GamePath"), mabinogiPath, NULL);
 
-	if (result == ERROR_SUCCESS && FileExists(mabinogiPath))
+	if (result == ERROR_SUCCESS)
 	{
 		GetParentDirectory(mabinogiPath);
 		lstrcat(mabinogiPath, _T("\\Mabinogi.exe"));
-		return true;
+		if (FileExists(mabinogiPath))
+		{
+			return true;
+		}
 	}
 
 	return false;
@@ -91,35 +102,49 @@ void SetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 	}
 
 	// SHRegSetPath를 쓰면 변수로 확장이 일어나서 안 됨.
-	SHRegSetUSValue(regMabinogi, _T(""), REG_SZ, mabinogiRoot,
+	SHRegSetUSValue(regMabinogi, _T("LauncherPath_"), REG_SZ, mabinogiRoot,
 		lstrlen(mabinogiRoot) * sizeof(mabinogiRoot[0]), SHREGSET_FORCE_HKCU);
 }
 
 // Mabinogi.exe경로를 다양한 방법으로 찾아서 넣어줌
-bool GetMabinogiPath(TCHAR mabinogiPath[MAX_PATH])
+LPCTSTR GetMabinogiPath()
 {
-	if (GetMabinogiPathOnRegistry  (mabinogiPath) ||
-		GetMabinogiPathOnExecutable(mabinogiPath))
+	// 캐싱
+	static TCHAR launcherPath[MAX_PATH] = {NULL, };
+	if (FileExists(launcherPath))
 	{
-		return true;
+		return launcherPath;
+	}
+
+	static bool asked = false;
+	if (asked)
+	{
+		return NULL;
+	}
+	asked = true;
+
+	if (GetMabinogiPathOnRegistry  (launcherPath) ||
+		GetMabinogiPathOnExecutable(launcherPath))
+	{
+		return launcherPath;
 	}
 
 	OPENFILENAME OFN;
 	memset(&OFN, 0, sizeof(OPENFILENAME));
 	OFN.lStructSize = sizeof(OPENFILENAME);
 	OFN.lpstrTitle = _T("마비노기 실행파일을 선택해주세요.");
-	OFN.lpstrFilter = TEXT("마비노기 실행파일(Mabinogi.exe)\0Mabinogi.exe\0모든 파일\0*.*\0");
-	OFN.lpstrFile = mabinogiPath;
+	OFN.lpstrFilter = _T("실행 파일\0*.exe\0모든 파일\0*.*\0");
+	OFN.lpstrFile = launcherPath;
 	OFN.nMaxFile = MAX_PATH;
 	OFN.Flags = OFN_ENABLESIZING | OFN_FILEMUSTEXIST;
 
 	if (GetOpenFileName(&OFN))
 	{
-		SetMabinogiPathOnRegistry(mabinogiPath);
-		return true;
+		SetMabinogiPathOnRegistry(launcherPath);
+		return launcherPath;
 	}
 
-	return false;
+	return NULL;
 }
 
 void ChangeWindowStyle(HWND hWnd)
@@ -132,10 +157,10 @@ void ChangeWindowStyle(HWND hWnd)
 	const LONG maximizeToggleStyle = WS_MAXIMIZEBOX;
 	LONG style;
 
-#ifdef FULLSCREEN
-	const LONG& toggleStyle = windowedFullscreenToggleStyle;
-#else
+#ifdef MABISCRVER_MAXIMIZE
 	const LONG& toggleStyle = maximizeToggleStyle;
+#else
+	const LONG& toggleStyle = windowedFullscreenToggleStyle;
 #endif
 
 	style = GetWindowLongPtr(hWnd, GWL_STYLE);
@@ -148,8 +173,14 @@ void ChangeWindowStyle(HWND hWnd)
 	SetWindowLongPtr(hWnd, GWL_STYLE, style);
 	SetClassLongPtr(hWnd, GCL_STYLE, style);
 
+	// 이 함수 호출 순서가 중요한데, ShowWindow를 나중에 호출시키면 완전 전체화면으로 시작한다.
+#ifdef MABISCRVER_TASKBAR
+	ShowWindow(hWnd, SW_MAXIMIZE);
+	SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+#else
 	SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 	ShowWindow(hWnd, SW_MAXIMIZE);
+#endif
 }
 
 bool IsMabinogiProcess(DWORD processID)
@@ -159,11 +190,16 @@ bool IsMabinogiProcess(DWORD processID)
 
 	if (hProcess)
 	{
-		GetProcessImageFileName(hProcess, szProcessName, MAX_PATH);
+		GetProcessImageFileName(hProcess, szProcessName, sizeof(szProcessName));
 		CloseHandle(hProcess);
 
-		if (StrStrI(szProcessName, _T("\\Mabinogi.exe\0")) ||
-			StrStrI(szProcessName, _T("\\Client.exe\0")))
+		LPCTSTR launcherPath = GetMabinogiPath();
+		TCHAR* launcherPartname = (launcherPath) ?
+			PathSkipRoot(launcherPath) :
+			_T("\\Mabinogi.exe");
+
+		if (StrStrI(szProcessName, launcherPartname) ||
+			StrStrI(szProcessName, _T("\\Client.exe")))
 		{
 			return true;
 		}
@@ -207,14 +243,14 @@ void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 
 void LaunchMabinogi()
 {
-	TCHAR mabinogiPath[MAX_PATH];
-	STARTUPINFO si = {sizeof(STARTUPINFO), };
-	PROCESS_INFORMATION pi;
-
-	if (!GetMabinogiPath(mabinogiPath))
+	LPCTSTR mabinogiPath = GetMabinogiPath();
+	if (mabinogiPath == NULL)
 	{
 		return;
 	}
+
+	STARTUPINFO si = {sizeof(STARTUPINFO), };
+	PROCESS_INFORMATION pi;
 
 	// 의존성을 줄이기 위해 ShellExecute대신 CreateProcess를 씀.
 	CreateProcess(mabinogiPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
