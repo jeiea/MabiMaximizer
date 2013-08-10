@@ -40,7 +40,7 @@ bool GetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
 		return true;
 	}
 
-	// SetMabinogiPath()에서 저장한 경로가 있으면 가져옴.
+	// 프로그램에서 사용자가 지정한 런처를 저장한 레지를 가져옴
 	result = SHRegGetPath(HKEY_CURRENT_USER, regMabinogi, _T("LauncherPath_"), mabinogiPath, NULL);
 	if (result == ERROR_SUCCESS && FileExists(mabinogiPath))
 	{
@@ -90,22 +90,6 @@ bool GetMabinogiPathOnExecutable(TCHAR mabinogiPath[MAX_PATH])
 	return false;
 }
 
-// 마비노기 런처경로를 주든 폴더경로를 주든 폴더경로로 바꿔서 레지삽입
-void SetMabinogiPathOnRegistry(TCHAR mabinogiPath[MAX_PATH])
-{
-	TCHAR mabinogiRoot[MAX_PATH];
-	lstrcpy(mabinogiRoot, mabinogiPath);
-
-	if (FileExists(mabinogiRoot))
-	{
-		GetParentDirectory(mabinogiRoot);
-	}
-
-	// SHRegSetPath를 쓰면 변수로 확장이 일어나서 안 됨.
-	SHRegSetUSValue(regMabinogi, _T("LauncherPath_"), REG_SZ, mabinogiRoot,
-		lstrlen(mabinogiRoot) * sizeof(mabinogiRoot[0]), SHREGSET_FORCE_HKCU);
-}
-
 // Mabinogi.exe경로를 다양한 방법으로 찾아서 넣어줌
 LPCTSTR GetMabinogiPath()
 {
@@ -140,7 +124,9 @@ LPCTSTR GetMabinogiPath()
 
 	if (GetOpenFileName(&OFN))
 	{
-		SetMabinogiPathOnRegistry(launcherPath);
+		// SHRegSetPath를 쓰면 변수로 확장이 일어나서 안 됨.
+		SHRegSetUSValue(regMabinogi, _T("LauncherPath_"), REG_SZ, launcherPath,
+			lstrlen(launcherPath) * sizeof(launcherPath[0]), SHREGSET_FORCE_HKCU);
 		return launcherPath;
 	}
 
@@ -249,13 +235,11 @@ void LaunchMabinogi()
 		return;
 	}
 
-	STARTUPINFO si = {sizeof(STARTUPINFO), };
-	PROCESS_INFORMATION pi;
-
-	// 의존성을 줄이기 위해 ShellExecute대신 CreateProcess를 씀.
-	CreateProcess(mabinogiPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-	CloseHandle(pi.hProcess);
-	CloseHandle(pi.hThread);
+	// CreateProcess를 쓰면 DLL을 하나 덜 쓰지만 권한상승이 항상 필요함
+	TCHAR mabinogiDir[MAX_PATH];
+	lstrcpy(mabinogiDir, mabinogiPath);
+	GetParentDirectory(mabinogiDir);
+	ShellExecute(NULL, _T("runas"), mabinogiPath, NULL, mabinogiDir, SW_SHOW);
 }
 
 int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
@@ -290,4 +274,5 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 
 	CloseHandle(hMutex);
 	return (int)Message.wParam;
+
 }
