@@ -12,13 +12,10 @@
 
 // Windows Header Files:
 #include <windows.h>
-
-// C RunTime Header Files
 #include <tchar.h>
 
 // TODO: reference additional headers your program requires here
-#include <Psapi.h>
+#include <TlHelp32.h>
 #include <Shlwapi.h>
 
-#pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Shlwapi.lib")

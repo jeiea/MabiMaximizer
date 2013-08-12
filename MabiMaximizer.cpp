@@ -9,6 +9,23 @@ LPCTSTR lpszTitle = _T("Mabinogi Maximizer");
 // 마비노기 세팅 레지스트리 경로
 LPCTSTR regMabinogi = _T("Software\\Nexon\\Mabinogi");
 
+int ErrorMessageBox()
+{
+	LPCTSTR pM;
+	DWORD err = GetLastError();
+
+	FormatMessage(
+		FORMAT_MESSAGE_ALLOCATE_BUFFER |
+		FORMAT_MESSAGE_FROM_SYSTEM |
+		FORMAT_MESSAGE_IGNORE_INSERTS,
+		NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		(LPTSTR)&pM, 0, NULL);
+	MessageBox(NULL, pM, _T("MabiMaximizer"), MB_OK | MB_ICONERROR);
+
+	LocalFree(&pM);
+	return err;
+}
+
 // http://stackoverflow.com/a/6218957
 BOOL FileExists(LPCTSTR szPath)
 {
@@ -133,6 +150,32 @@ LPCTSTR GetMabinogiPath()
 	return NULL;
 }
 
+BOOL SetPrivilege( 
+	HANDLE hToken,  // token handle 
+	LPCTSTR Privilege,  // Privilege to enable/disable 
+	BOOL bEnablePrivilege  // TRUE to enable. FALSE to disable 
+	) 
+{ 
+	TOKEN_PRIVILEGES tp = { 0 }; 
+	// Initialize everything to zero 
+	LUID luid; 
+	DWORD cb=sizeof(TOKEN_PRIVILEGES); 
+	if(!LookupPrivilegeValue( NULL, Privilege, &luid ))
+		return FALSE; 
+	tp.PrivilegeCount = 1; 
+	tp.Privileges[0].Luid = luid; 
+	if(bEnablePrivilege) { 
+		tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED; 
+	} else { 
+		tp.Privileges[0].Attributes = 0; 
+	} 
+	AdjustTokenPrivileges( hToken, FALSE, &tp, cb, NULL, NULL ); 
+	if (GetLastError() != ERROR_SUCCESS) 
+		return FALSE; 
+
+	return TRUE;
+}
+
 void ChangeWindowStyle(HWND hWnd)
 {
 	// WS_CAPTION == WS_BORDER | WS_DLGFRAME인데, 둘 중 하나라도 없으면 타이틀 바가 사라진다.
@@ -149,6 +192,20 @@ void ChangeWindowStyle(HWND hWnd)
 	const LONG& toggleStyle = windowedFullscreenToggleStyle;
 #endif
 
+	HANDLE hToken;
+	TOKEN_PRIVILEGES tp;
+	LUID luid;
+
+	OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | 
+		TOKEN_QUERY, &hToken);
+	LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &luid);
+
+	tp.PrivilegeCount = 1;
+	tp.Privileges[0].Luid = luid;
+	tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+	AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, NULL);
+
 	style = GetWindowLongPtr(hWnd, GWL_STYLE);
 	if (style & WS_POPUP)
 	{
@@ -156,8 +213,10 @@ void ChangeWindowStyle(HWND hWnd)
 		return;
 	}
 	style ^= toggleStyle;
-	SetWindowLongPtr(hWnd, GWL_STYLE, style);
-	SetClassLongPtr(hWnd, GCL_STYLE, style);
+	if (!SetWindowLongPtr(hWnd, GWL_STYLE, style))
+	{
+		ErrorMessageBox();
+	}
 
 	// 이 함수 호출 순서가 중요한데, ShowWindow를 나중에 호출시키면 완전 전체화면으로 시작한다.
 #ifdef MABISCRVER_TASKBAR
@@ -169,54 +228,50 @@ void ChangeWindowStyle(HWND hWnd)
 #endif
 }
 
-bool IsMabinogiProcess(DWORD processID)
+bool SearchMabinogiFromSnapshot(HANDLE hSnap, PROCESSENTRY32& pe)
 {
-	TCHAR szProcessName[MAX_PATH] = _T("");
-	HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processID); 
-
-	if (hProcess)
+	do
 	{
-		GetProcessImageFileName(hProcess, szProcessName, sizeof(szProcessName));
-		CloseHandle(hProcess);
-
-		LPCTSTR launcherPath = GetMabinogiPath();
-		TCHAR* launcherPartname = (launcherPath) ?
-			PathSkipRoot(launcherPath) :
-			_T("\\Mabinogi.exe");
-
-		if (StrStrI(szProcessName, launcherPartname) ||
-			StrStrI(szProcessName, _T("\\Client.exe")))
+		if (StrStrI(pe.szExeFile, _T("Mabinogi.exe")) || 
+			StrStrI(pe.szExeFile, _T("Client.exe")))
 		{
 			return true;
 		}
 	}
+	while (Process32Next(hSnap, &pe));
 	return false;
 }
 
 bool IsMabinogiAlive()
 {
-	DWORD aProcesses[1024], cbNeeded, cProcesses;
+	HANDLE hSnap;
+	PROCESSENTRY32 pe;
 
-	if (!EnumProcesses(aProcesses, sizeof(aProcesses), &cbNeeded))
+	hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (hSnap == INVALID_HANDLE_VALUE)
 	{
-		MessageBox(NULL, _T("프로세스에 접근할 수 없습니다."), _T("에러"), MB_OK);
+		ErrorMessageBox();
 		return false;
 	}
-	cProcesses = cbNeeded / sizeof(DWORD);
 
-	for (unsigned i = 0; i < cProcesses; i++)
-		if (IsMabinogiProcess(aProcesses[i]))
-			return true;
+	bool isAlive;
+	pe.dwSize = sizeof(PROCESSENTRY32);
+	if (Process32First(hSnap, &pe))
+	{
+		isAlive = SearchMabinogiFromSnapshot(hSnap, pe);
+	}
 
-	return false;
+	CloseHandle(hSnap);
+	return isAlive;
 }
 
 void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 {
+	KillTimer(hWnd, idEvent);
+
 	HWND hMabiWin = FindWindow(_T("Mabinogi"), _T("마비노기"));
 	if (IsWindowVisible(hMabiWin))
 	{
-		KillTimer(hWnd, idEvent);
 		ChangeWindowStyle(hMabiWin);
 		PostQuitMessage(0);
 	}
@@ -225,6 +280,8 @@ void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 	{
 		PostQuitMessage(0);
 	}
+
+	SetTimer(hWnd, idEvent, 500, MonitoringTimer);
 }
 
 void LaunchMabinogi()
@@ -274,5 +331,4 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 
 	CloseHandle(hMutex);
 	return (int)Message.wParam;
-
 }
