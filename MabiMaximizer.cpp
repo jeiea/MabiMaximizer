@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "resource.h"
 
-// Predefined로 MABISCRVER_MAXIMIZE, MABISCRVER_TASKBAR, MABISCRVER_FULLSCREEN 버전 3개가 있다
+// Predefined로 MABISCRVER_MAXIMIZE, MABISCRVER_TITLEBAR, MABISCRVER_FULLSCREEN 버전 3개가 있다
 // resource.h에 정의해야 함
 
 // 프로그램 이름
@@ -150,32 +150,6 @@ LPCTSTR GetMabinogiPath()
 	return NULL;
 }
 
-BOOL SetPrivilege( 
-	HANDLE hToken,  // token handle 
-	LPCTSTR Privilege,  // Privilege to enable/disable 
-	BOOL bEnablePrivilege  // TRUE to enable. FALSE to disable 
-	) 
-{ 
-	TOKEN_PRIVILEGES tp = { 0 }; 
-	// Initialize everything to zero 
-	LUID luid; 
-	DWORD cb=sizeof(TOKEN_PRIVILEGES); 
-	if(!LookupPrivilegeValue( NULL, Privilege, &luid ))
-		return FALSE; 
-	tp.PrivilegeCount = 1; 
-	tp.Privileges[0].Luid = luid; 
-	if(bEnablePrivilege) { 
-		tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED; 
-	} else { 
-		tp.Privileges[0].Attributes = 0; 
-	} 
-	AdjustTokenPrivileges( hToken, FALSE, &tp, cb, NULL, NULL ); 
-	if (GetLastError() != ERROR_SUCCESS) 
-		return FALSE; 
-
-	return TRUE;
-}
-
 void ChangeWindowStyle(HWND hWnd)
 {
 	// WS_CAPTION == WS_BORDER | WS_DLGFRAME인데, 둘 중 하나라도 없으면 타이틀 바가 사라진다.
@@ -192,20 +166,6 @@ void ChangeWindowStyle(HWND hWnd)
 	const LONG& toggleStyle = windowedFullscreenToggleStyle;
 #endif
 
-	HANDLE hToken;
-	TOKEN_PRIVILEGES tp;
-	LUID luid;
-
-	OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | 
-		TOKEN_QUERY, &hToken);
-	LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &luid);
-
-	tp.PrivilegeCount = 1;
-	tp.Privileges[0].Luid = luid;
-	tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-	AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, NULL);
-
 	style = GetWindowLongPtr(hWnd, GWL_STYLE);
 	if (style & WS_POPUP)
 	{
@@ -219,7 +179,7 @@ void ChangeWindowStyle(HWND hWnd)
 	}
 
 	// 이 함수 호출 순서가 중요한데, ShowWindow를 나중에 호출시키면 완전 전체화면으로 시작한다.
-#ifdef MABISCRVER_TASKBAR
+#ifdef MABISCRVER_TITLEBAR
 	ShowWindow(hWnd, SW_MAXIMIZE);
 	SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 #else
@@ -254,15 +214,52 @@ bool IsMabinogiAlive()
 		return false;
 	}
 
-	bool isAlive;
+	bool isAlive = false;
 	pe.dwSize = sizeof(PROCESSENTRY32);
 	if (Process32First(hSnap, &pe))
 	{
 		isAlive = SearchMabinogiFromSnapshot(hSnap, pe);
 	}
+	else
+	{
+		ErrorMessageBox();
+	}
 
 	CloseHandle(hSnap);
 	return isAlive;
+}
+
+bool IsIgnorableWarningMsgBox(HWND hStaticWarning)
+{
+	TCHAR mes[MAX_PATH];
+	if (GetWindowText(hStaticWarning, mes, sizeof(mes) / sizeof(mes[0])))
+	{
+		if (StrStrI(mes, _T("고객님의 시스템에 설치되어있는 그래픽 카드는")) &&
+			StrStrI(mes, _T("계속 실행하시겠습니까?")))
+		{
+			return true;
+		}
+	}
+	else
+	{
+		ErrorMessageBox();
+	}
+	return false;
+}
+
+void PassIgnorableWarningMsgBox()
+{
+	HWND hMsgBox = NULL;
+	while (hMsgBox = FindWindowEx(NULL, hMsgBox, NULL, _T("주의해주세요!")))
+	{
+		HWND hStaticWarning = FindWindowEx(hMsgBox, NULL, _T("Static"), NULL);
+		if (hStaticWarning &&
+			IsIgnorableWarningMsgBox(hStaticWarning))
+		{
+			HWND hButtonOK = FindWindowEx(hMsgBox, NULL, _T("Button"), _T("예(&Y)"));
+			SendDlgItemMessage(hMsgBox, GetDlgCtrlID(hButtonOK), BM_CLICK, NULL, NULL);
+		}
+	}
 }
 
 void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
@@ -275,6 +272,8 @@ void CALLBACK MonitoringTimer(HWND hWnd, UINT uMsg, UINT idEvent, DWORD dwTime)
 		ChangeWindowStyle(hMabiWin);
 		PostQuitMessage(0);
 	}
+
+	PassIgnorableWarningMsgBox();
 
 	if (!IsMabinogiAlive())
 	{
@@ -292,11 +291,14 @@ void LaunchMabinogi()
 		return;
 	}
 
-	// CreateProcess를 쓰면 DLL을 하나 덜 쓰지만 권한상승이 항상 필요함
+	// ShellExecute는 runas로 관리자 권한을 얻어올 수 있지만 shell32.dll의존성을 추가하게 됨
+	// 이건 아예 UAC Execution Level: requireAdministrator니까 상관 없음
+	STARTUPINFO si={sizeof(STARTUPINFO),};
+	PROCESS_INFORMATION pi;
 	TCHAR mabinogiDir[MAX_PATH];
 	lstrcpy(mabinogiDir, mabinogiPath);
 	GetParentDirectory(mabinogiDir);
-	ShellExecute(NULL, _T("runas"), mabinogiPath, NULL, mabinogiDir, SW_SHOW);
+	CreateProcess(mabinogiPath, NULL, NULL, NULL, FALSE, 0, NULL, mabinogiDir, &si, &pi);
 }
 
 int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
